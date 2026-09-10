@@ -19,6 +19,13 @@ config_por_defecto = {
     "costo_oxigeno": 180.0
 }
 
+# Diccionario de densidades (kg/m2 por cada 1mm de espesor, equivale a g/cm3)
+DENSIDADES = {
+    "Acero al Carbono": 7.85,
+    "Acero Inoxidable": 7.93,
+    "Aluminio": 2.70
+}
+
 def cargar_parametros():
     if os.path.exists(ARCHIVO_CONFIG):
         with open(ARCHIVO_CONFIG, "r") as archivo:
@@ -56,14 +63,12 @@ df_chapas = cargar_bd_chapas()
 
 # --- 3. FUNCIONES DE EXTRACCIÓN AUTOMÁTICA ---
 def procesar_dxf(file_bytes):
-    """Devuelve (longitud_total, ancho, largo)"""
     try:
         stringio = io.StringIO(file_bytes.decode("utf-8"))
         doc = ezdxf.read(stringio)
         msp = doc.modelspace()
         
         longitud_total = 0.0
-        # Variables para calcular el recuadro (bounding box)
         min_x = float('inf')
         min_y = float('inf')
         max_x = float('-inf')
@@ -75,7 +80,6 @@ def procesar_dxf(file_bytes):
             if entity.dxftype() == 'LINE':
                 start, end = entity.dxf.start, entity.dxf.end
                 longitud_total += math.dist((start.x, start.y), (end.x, end.y))
-                # Actualizar límites
                 min_x = min(min_x, start.x, end.x)
                 max_x = max(max_x, start.x, end.x)
                 min_y = min(min_y, start.y, end.y)
@@ -95,8 +99,6 @@ def procesar_dxf(file_bytes):
                 angle = math.radians(entity.dxf.end_angle - entity.dxf.start_angle)
                 if angle < 0: angle += 2 * math.pi
                 longitud_total += entity.dxf.radius * angle
-                
-                # Aproximación del bounding box del arco usando el círculo completo para simplificar
                 cx, cy, r = entity.dxf.center.x, entity.dxf.center.y, entity.dxf.radius
                 min_x = min(min_x, cx - r)
                 max_x = max(max_x, cx + r)
@@ -113,7 +115,6 @@ def procesar_dxf(file_bytes):
                     min_y = min(min_y, points[i][1])
                     max_y = max(max_y, points[i][1])
                 
-                # Procesar el último punto
                 min_x = min(min_x, points[-1][0])
                 max_x = max(max_x, points[-1][0])
                 min_y = min(min_y, points[-1][1])
@@ -136,24 +137,20 @@ def procesar_dxf(file_bytes):
         return None, None, None
 
 def procesar_pdf(file_bytes, factor_escala):
-    """Devuelve (longitud_total, ancho, largo) en milimetros"""
     try:
         doc = fitz.open(stream=file_bytes, filetype="pdf")
         longitud_total_puntos = 0.0
-        
-        # Bounding box global en puntos PDF
         bbox_global = fitz.Rect() 
         elementos_encontrados = False
 
         for page in doc:
             paths = page.get_drawings()
             for path in paths:
-                # Actualizar el recuadro global con el recuadro de este trazado
                 if not elementos_encontrados:
                     bbox_global = path["rect"]
                     elementos_encontrados = True
                 else:
-                    bbox_global = bbox_global | path["rect"] # Unión de rectángulos
+                    bbox_global = bbox_global | path["rect"]
                 
                 for item in path["items"]:
                     if item[0] == "l": 
@@ -166,9 +163,7 @@ def procesar_pdf(file_bytes, factor_escala):
         if not elementos_encontrados:
             return None, None, None
             
-        # 1 punto PDF = 0.352778 mm.
         conversion = 0.352778 * factor_escala
-        
         longitud_mm = longitud_total_puntos * conversion
         ancho_mm = bbox_global.width * conversion
         largo_mm = bbox_global.height * conversion
@@ -197,10 +192,10 @@ if st.sidebar.button("Guardar Parámetros de Máquina", type="primary"):
 st.title("⚙️ Sistema Integral de Cotización CNC")
 
 # --- NAVEGACIÓN POR PESTAÑAS ---
-tab1, tab2 = st.tabs(["💰 Calculadora de Cotizaciones", "🗄️ Base de Datos de Materiales"])
+tab1, tab2, tab3 = st.tabs(["💰 Calculadora de Cotizaciones", "🗄️ Base de Datos de Materiales", "⚖️ Calculadora de Pesos"])
 
 # ==========================================
-# PESTAÑA 1: CALCULADORA
+# PESTAÑA 1: CALCULADORA DE COSTOS
 # ==========================================
 with tab1:
     st.header("1. Carga de Plano")
@@ -215,11 +210,11 @@ with tab1:
     col1, col2 = st.columns(2)
     with col1:
         materiales_disponibles = df_chapas["Material"].unique()
-        material_seleccionado = st.selectbox("Material de la Chapa", materiales_disponibles)
+        material_seleccionado = st.selectbox("Material de la Chapa", materiales_disponibles, key="mat_cotizador")
     with col2:
         espesores_disponibles = df_chapas[df_chapas["Material"] == material_seleccionado]["Espesor (mm)"].unique()
         if len(espesores_disponibles) > 0:
-            espesor_seleccionado = st.selectbox("Espesor (mm)", sorted(espesores_disponibles))
+            espesor_seleccionado = st.selectbox("Espesor (mm)", sorted(espesores_disponibles), key="esp_cotizador")
         else:
             st.warning("No hay espesores cargados para este material.")
             espesor_seleccionado = 0
@@ -230,7 +225,6 @@ with tab1:
         if archivo_corte is not None and espesor_seleccionado > 0:
             file_bytes = archivo_corte.getvalue()
             
-            # --- EXTRACCIÓN AUTOMÁTICA ---
             if archivo_corte.name.lower().endswith(".dxf"):
                 longitud_corte_mm, ancho_pieza, largo_pieza = procesar_dxf(file_bytes)
             else:
@@ -239,21 +233,17 @@ with tab1:
             if longitud_corte_mm is not None and longitud_corte_mm > 0:
                 st.success("Archivo procesado correctamente. Medidas extraídas automáticamente.")
                 
-                # Mostrar las medidas detectadas
                 c1, c2, c3 = st.columns(3)
                 c1.metric("Longitud de Corte", f"{longitud_corte_mm:.0f} mm")
                 c2.metric("Ancho Detectado", f"{ancho_pieza:.1f} mm")
                 c3.metric("Largo Detectado", f"{largo_pieza:.1f} mm")
 
-                # --- BUSCAR PRECIO EN BASE DE DATOS ---
                 fila_material = df_chapas[(df_chapas["Material"] == material_seleccionado) & (df_chapas["Espesor (mm)"] == espesor_seleccionado)]
                 precio_m2_chapa = fila_material["Precio por m2 ($)"].values[0]
 
-                # --- CÁLCULO DE COSTO DE MATERIAL ---
                 area_m2 = (ancho_pieza * largo_pieza) / 1000000
                 costo_material_total = area_m2 * precio_m2_chapa
 
-                # --- LÓGICA DE CÁLCULO MÁQUINA Y GAS ---
                 if "Acero al Carbono" in material_seleccionado:
                     gas_utilizado = "Oxígeno"
                     costo_gas_unitario = nuevo_costo_oxigeno
@@ -274,7 +264,6 @@ with tab1:
                 
                 costo_total = costo_tiempo + costo_gas_total + costo_material_total
 
-                # --- MOSTRAR RESULTADOS ---
                 st.header("3. Resultados de la Cotización")
                 st.subheader(f"Costo Estimado Total: ${costo_total:.2f}")
                 
@@ -327,3 +316,40 @@ with tab2:
         guardar_bd_chapas(df_editado)
         st.success("✅ Base de datos actualizada correctamente.")
         st.rerun()
+
+# ==========================================
+# PESTAÑA 3: CALCULADORA DE PESOS
+# ==========================================
+with tab3:
+    st.header("⚖️ Calculadora de Pesos de Chapa")
+    st.write("Consulta rápidamente el peso teórico del material sin salir de la aplicación. Los cálculos se actualizan automáticamente al cambiar los valores.")
+    
+    col_peso1, col_peso2 = st.columns(2)
+    with col_peso1:
+        material_peso = st.selectbox("Tipo de Material", list(DENSIDADES.keys()), key="mat_calculadora_peso")
+    with col_peso2:
+        espesor_peso = st.number_input("Espesor de la chapa (mm)", min_value=0.1, value=1.0, step=0.1, key="esp_calculadora_peso")
+        
+    st.write("---")
+    
+    st.subheader("Opcional: Calcular peso de una pieza o recorte específico")
+    col_peso3, col_peso4 = st.columns(2)
+    with col_peso3:
+        ancho_peso = st.number_input("Ancho (mm)", min_value=1.0, value=1000.0, step=100.0, key="ancho_calculadora_peso")
+    with col_peso4:
+        largo_peso = st.number_input("Largo (mm)", min_value=1.0, value=1000.0, step=100.0, key="largo_calculadora_peso")
+        
+    # --- CÁLCULOS ---
+    # Peso por m2 = espesor (mm) * densidad (g/cm3)
+    peso_por_m2 = espesor_peso * DENSIDADES[material_peso]
+    
+    # Peso total = Area (m2) * peso_por_m2
+    area_m2_peso = (ancho_peso * largo_peso) / 1000000
+    peso_total = area_m2_peso * peso_por_m2
+    
+    st.write("") # Espacio en blanco
+    
+    # --- RESULTADOS ---
+    res_peso1, res_peso2 = st.columns(2)
+    res_peso1.metric("⚖️ Peso por Metro Cuadrado", f"{peso_por_m2:.2f} kg/m²")
+    res_peso2.metric("📦 Peso Total de la Pieza", f"{peso_total:.2f} kg")
