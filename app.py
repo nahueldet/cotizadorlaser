@@ -9,24 +9,20 @@ import os
 
 st.set_page_config(page_title="Cotizador CNC Automático", layout="wide")
 
-# --- LÓGICA DE GUARDADO DE PARÁMETROS ---
+# --- 1. LÓGICA DE GUARDADO DE PARÁMETROS OPERATIVOS ---
 ARCHIVO_CONFIG = "parametros.json"
+ARCHIVO_BD = "precios_chapas.csv"
 
-# Valores por defecto ampliados con los costos de chapa
 config_por_defecto = {
     "costo_hora_maquina": 5000.0,
     "costo_nitrogeno": 250.0,
-    "costo_oxigeno": 180.0,
-    "costo_kg_carbono": 1500.0,
-    "costo_kg_inox": 6500.0,
-    "costo_kg_aluminio": 7000.0
+    "costo_oxigeno": 180.0
 }
 
 def cargar_parametros():
     if os.path.exists(ARCHIVO_CONFIG):
         with open(ARCHIVO_CONFIG, "r") as archivo:
             datos = json.load(archivo)
-            # Validamos que existan las nuevas llaves en caso de tener un archivo viejo guardado
             for key, value in config_por_defecto.items():
                 if key not in datos:
                     datos[key] = value
@@ -39,14 +35,33 @@ def guardar_parametros(nuevos_parametros):
 
 parametros_actuales = cargar_parametros()
 
-# --- FUNCIONES DE EXTRACCIÓN DE LONGITUD ---
+# --- 2. LÓGICA DE BASE DE DATOS DE CHAPAS ---
+def cargar_bd_chapas():
+    if os.path.exists(ARCHIVO_BD):
+        return pd.read_csv(ARCHIVO_BD)
+    else:
+        # Base de datos por defecto si no existe el archivo
+        data = {
+            "Material": ["Acero al Carbono", "Acero al Carbono", "Acero al Carbono", "Acero Inoxidable", "Aluminio"],
+            "Espesor (mm)": [1.0, 1.2, 2.0, 1.0, 1.0],
+            "Precio por m2 ($)": [15000, 18000, 30000, 45000, 35000]
+        }
+        df = pd.DataFrame(data)
+        df.to_csv(ARCHIVO_BD, index=False)
+        return df
+
+def guardar_bd_chapas(df):
+    df.to_csv(ARCHIVO_BD, index=False)
+
+df_chapas = cargar_bd_chapas()
+
+# --- 3. FUNCIONES DE EXTRACCIÓN DE LONGITUD ---
 def calcular_longitud_dxf(file_bytes):
     try:
         stringio = io.StringIO(file_bytes.decode("utf-8"))
         doc = ezdxf.read(stringio)
         msp = doc.modelspace()
         longitud_total = 0.0
-        
         for entity in msp:
             if entity.dxftype() == 'LINE':
                 start, end = entity.dxf.start, entity.dxf.end
@@ -63,7 +78,6 @@ def calcular_longitud_dxf(file_bytes):
                     longitud_total += math.dist(points[i], points[i+1])
                 if entity.closed:
                     longitud_total += math.dist(points[-1], points[0])
-                    
         return longitud_total 
     except Exception as e:
         st.error(f"Error al leer el DXF: {e}")
@@ -73,7 +87,6 @@ def calcular_longitud_pdf(file_bytes, factor_escala):
     try:
         doc = fitz.open(stream=file_bytes, filetype="pdf")
         longitud_total_puntos = 0.0
-        
         for page in doc:
             paths = page.get_drawings()
             for path in paths:
@@ -84,133 +97,171 @@ def calcular_longitud_pdf(file_bytes, factor_escala):
                     elif item[0] == "c": 
                         p1, p4 = item[1], item[4]
                         longitud_total_puntos += math.dist((p1.x, p1.y), (p4.x, p4.y))
-                        
         longitud_mm = longitud_total_puntos * 0.352778 * factor_escala
         return longitud_mm
     except Exception as e:
         st.error(f"Error al leer el PDF: {e}")
         return None
 
-# --- BARRA LATERAL: CONFIGURACIÓN DE PRECIOS ---
-st.sidebar.header("💾 Parámetros Operativos")
+# --- BARRA LATERAL: PARÁMETROS OPERATIVOS ---
+st.sidebar.header("⚙️ Parámetros de Máquina y Gas")
 nuevo_costo_hora = st.sidebar.number_input("Costo Hora Máquina ($)", value=float(parametros_actuales["costo_hora_maquina"]), step=100.0)
 nuevo_costo_nitrogeno = st.sidebar.number_input("Costo Nitrógeno (por m³) ($)", value=float(parametros_actuales["costo_nitrogeno"]), step=10.0)
 nuevo_costo_oxigeno = st.sidebar.number_input("Costo Oxígeno (por m³) ($)", value=float(parametros_actuales["costo_oxigeno"]), step=10.0)
 
-st.sidebar.header("📦 Costos de Materiales (por Kg)")
-nuevo_costo_carbono = st.sidebar.number_input("Acero al Carbono ($/kg)", value=float(parametros_actuales["costo_kg_carbono"]), step=50.0)
-nuevo_costo_inox = st.sidebar.number_input("Acero Inoxidable ($/kg)", value=float(parametros_actuales["costo_kg_inox"]), step=50.0)
-nuevo_costo_aluminio = st.sidebar.number_input("Aluminio ($/kg)", value=float(parametros_actuales["costo_kg_aluminio"]), step=50.0)
-
-if st.sidebar.button("Actualizar y Guardar Precios", type="primary"):
+if st.sidebar.button("Guardar Parámetros de Máquina", type="primary"):
     nuevos_datos = {
         "costo_hora_maquina": nuevo_costo_hora,
         "costo_nitrogeno": nuevo_costo_nitrogeno,
-        "costo_oxigeno": nuevo_costo_oxigeno,
-        "costo_kg_carbono": nuevo_costo_carbono,
-        "costo_kg_inox": nuevo_costo_inox,
-        "costo_kg_aluminio": nuevo_costo_aluminio
+        "costo_oxigeno": nuevo_costo_oxigeno
     }
     guardar_parametros(nuevos_datos)
-    st.sidebar.success("✅ Precios actualizados exitosamente.")
+    st.sidebar.success("✅ Parámetros guardados.")
     st.rerun()
 
-# --- INTERFAZ PRINCIPAL ---
-st.title("⚙️ Calculadora de Costos CNC Automática")
+st.title("⚙️ Sistema Integral de Cotización CNC")
 
-st.header("1. Carga de Plano y Datos del Trabajo")
-archivo_corte = st.file_uploader("Cargar Plano (.DXF o .PDF)", type=["pdf", "dxf"])
+# --- NAVEGACIÓN POR PESTAÑAS ---
+tab1, tab2 = st.tabs(["💰 Calculadora de Cotizaciones", "🗄️ Base de Datos de Materiales"])
 
-factor_escala_pdf = 1.0
-if archivo_corte is not None and archivo_corte.name.lower().endswith(".pdf"):
-    st.info("⚠️ Has cargado un PDF. Asegúrate de ingresar la escala correcta.")
-    factor_escala_pdf = st.number_input("Factor de Escala del PDF (ej: 10 para 1:10)", min_value=0.1, value=1.0)
+# ==========================================
+# PESTAÑA 1: CALCULADORA
+# ==========================================
+with tab1:
+    st.header("1. Carga de Plano")
+    archivo_corte = st.file_uploader("Cargar Plano (.DXF o .PDF)", type=["pdf", "dxf"])
+    factor_escala_pdf = 1.0
+    if archivo_corte is not None and archivo_corte.name.lower().endswith(".pdf"):
+        st.info("⚠️ Has cargado un PDF. Asegúrate de ingresar la escala correcta.")
+        factor_escala_pdf = st.number_input("Factor de Escala del PDF (ej: 10 para 1:10)", min_value=0.1, value=1.0)
 
-st.subheader("Especificaciones del Material")
-col1, col2 = st.columns(2)
-with col1:
-    material = st.selectbox("Material de la Chapa", ["Acero al Carbono", "Acero Inoxidable", "Aluminio"])
-with col2:
-    espesor = st.number_input("Espesor de la chapa (mm)", min_value=0.1, value=1.0, step=0.1)
-
-col3, col4 = st.columns(2)
-with col3:
-    ancho_pieza = st.number_input("Ancho del recuadro de la pieza (mm)", min_value=1.0, value=100.0)
-with col4:
-    largo_pieza = st.number_input("Largo del recuadro de la pieza (mm)", min_value=1.0, value=100.0)
-
-st.write("---")
-
-if st.button("Calcular Costo de Trabajo", type="primary", use_container_width=True):
-    if archivo_corte is not None:
-        file_bytes = archivo_corte.getvalue()
-        
-        if archivo_corte.name.lower().endswith(".dxf"):
-            longitud_corte_mm = calcular_longitud_dxf(file_bytes)
+    st.header("2. Especificaciones de la Pieza")
+    col1, col2 = st.columns(2)
+    with col1:
+        # Extraemos los materiales únicos que existen en la base de datos
+        materiales_disponibles = df_chapas["Material"].unique()
+        material_seleccionado = st.selectbox("Material de la Chapa", materiales_disponibles)
+    with col2:
+        # Filtramos los espesores disponibles para ese material en la base de datos
+        espesores_disponibles = df_chapas[df_chapas["Material"] == material_seleccionado]["Espesor (mm)"].unique()
+        if len(espesores_disponibles) > 0:
+            espesor_seleccionado = st.selectbox("Espesor (mm)", sorted(espesores_disponibles))
         else:
-            longitud_corte_mm = calcular_longitud_pdf(file_bytes, factor_escala_pdf)
-            
-        if longitud_corte_mm is not None and longitud_corte_mm > 0:
-            st.success("Archivo procesado correctamente.")
-            
-            # --- DENSIDADES Y PRECIOS ---
-            densidades_g_cm3 = {
-                "Acero al Carbono": 7.85,
-                "Acero Inoxidable": 7.93,
-                "Aluminio": 2.70
-            }
-            costos_kg = {
-                "Acero al Carbono": nuevo_costo_carbono,
-                "Acero Inoxidable": nuevo_costo_inox,
-                "Aluminio": nuevo_costo_aluminio
-            }
+            st.warning("No hay espesores cargados para este material en la base de datos.")
+            espesor_seleccionado = 0
 
-            # --- CÁLCULO DE PESO Y COSTO DE MATERIAL ---
-            # Volumen en mm3 = ancho * largo * espesor
-            # mm3 a cm3 = / 1000.  cm3 a kg = * densidad / 1000
-            peso_kg = (ancho_pieza * largo_pieza * espesor * densidades_g_cm3[material]) / 1000000
-            costo_material_total = peso_kg * costos_kg[material]
+    col3, col4 = st.columns(2)
+    with col3:
+        ancho_pieza = st.number_input("Ancho del recuadro de la pieza (mm)", min_value=1.0, value=100.0)
+    with col4:
+        largo_pieza = st.number_input("Largo del recuadro de la pieza (mm)", min_value=1.0, value=100.0)
 
-            # --- LÓGICA DE CÁLCULO MÁQUINA Y GAS ---
-            if material == "Acero al Carbono":
-                gas_utilizado = "Oxígeno"
-                costo_gas_unitario = nuevo_costo_oxigeno
-                velocidad_corte_mm_min = 4000 / espesor 
-                consumo_gas_m3_min = 0.5 * espesor 
+    st.write("---")
+
+    if st.button("Calcular Costo Final", type="primary", use_container_width=True):
+        if archivo_corte is not None and espesor_seleccionado > 0:
+            file_bytes = archivo_corte.getvalue()
+            
+            if archivo_corte.name.lower().endswith(".dxf"):
+                longitud_corte_mm = calcular_longitud_dxf(file_bytes)
             else:
-                gas_utilizado = "Nitrógeno"
-                costo_gas_unitario = nuevo_costo_nitrogeno
-                velocidad_corte_mm_min = 3500 / (espesor * 1.2)
-                consumo_gas_m3_min = 0.8 * espesor
+                longitud_corte_mm = calcular_longitud_pdf(file_bytes, factor_escala_pdf)
+                
+            if longitud_corte_mm is not None and longitud_corte_mm > 0:
+                st.success("Archivo procesado correctamente.")
+                
+                # --- BUSCAR PRECIO EN BASE DE DATOS ---
+                # Buscamos la fila que coincide con el material y espesor seleccionado
+                fila_material = df_chapas[(df_chapas["Material"] == material_seleccionado) & (df_chapas["Espesor (mm)"] == espesor_seleccionado)]
+                precio_m2_chapa = fila_material["Precio por m2 ($)"].values[0]
 
-            velocidad_corte_mm_min = max(velocidad_corte_mm_min, 1) 
-            tiempo_minutos = longitud_corte_mm / velocidad_corte_mm_min
-            consumo_total_gas = tiempo_minutos * consumo_gas_m3_min
+                # --- CÁLCULO DE COSTO DE MATERIAL ---
+                # Área de la pieza en m2 (mm x mm / 1.000.000)
+                area_m2 = (ancho_pieza * largo_pieza) / 1000000
+                costo_material_total = area_m2 * precio_m2_chapa
 
-            costo_tiempo = (tiempo_minutos / 60) * nuevo_costo_hora
-            costo_gas_total = consumo_total_gas * costo_gas_unitario
-            
-            # TOTAL FINAL
-            costo_total = costo_tiempo + costo_gas_total + costo_material_total
+                # --- LÓGICA DE CÁLCULO MÁQUINA Y GAS ---
+                if "Acero al Carbono" in material_seleccionado:
+                    gas_utilizado = "Oxígeno"
+                    costo_gas_unitario = nuevo_costo_oxigeno
+                    velocidad_corte_mm_min = 4000 / espesor_seleccionado 
+                    consumo_gas_m3_min = 0.5 * espesor_seleccionado 
+                else:
+                    gas_utilizado = "Nitrógeno"
+                    costo_gas_unitario = nuevo_costo_nitrogeno
+                    velocidad_corte_mm_min = 3500 / (espesor_seleccionado * 1.2)
+                    consumo_gas_m3_min = 0.8 * espesor_seleccionado
 
-            # --- MOSTRAR RESULTADOS ---
-            st.header("2. Resultados de la Cotización")
-            
-            res1, res2, res3, res4 = st.columns(4)
-            res1.metric("Longitud Total", f"{longitud_corte_mm:.0f} mm")
-            res2.metric("Tiempo de Proceso", f"{tiempo_minutos:.2f} min")
-            res3.metric("Peso del Material", f"{peso_kg:.2f} kg")
-            res4.metric("Consumo de Gas", f"{consumo_total_gas:.2f} m³")
+                velocidad_corte_mm_min = max(velocidad_corte_mm_min, 1) 
+                tiempo_minutos = longitud_corte_mm / velocidad_corte_mm_min
+                consumo_total_gas = tiempo_minutos * consumo_gas_m3_min
 
-            st.subheader(f"Costo Estimado Total: ${costo_total:.2f}")
-            
-            with st.expander("Ver desglose detallado de costos", expanded=True):
-                st.write(f"🏭 **Operación CNC:**")
-                st.write(f"- Costo por tiempo de máquina (${nuevo_costo_hora}/h): **${costo_tiempo:.2f}**")
-                st.write(f"- Costo por consumo de {gas_utilizado} (${costo_gas_unitario}/m³): **${costo_gas_total:.2f}**")
-                st.write(f"📦 **Materia Prima:**")
-                st.write(f"- Costo de Chapa {material} ({peso_kg:.2f} kg a ${costos_kg[material]}/kg): **${costo_material_total:.2f}**")
+                costo_tiempo = (tiempo_minutos / 60) * nuevo_costo_hora
+                costo_gas_total = consumo_total_gas * costo_gas_unitario
+                
+                # TOTAL FINAL
+                costo_total = costo_tiempo + costo_gas_total + costo_material_total
+
+                # --- MOSTRAR RESULTADOS ---
+                st.header("3. Resultados de la Cotización")
+                
+                res1, res2, res3, res4 = st.columns(4)
+                res1.metric("Longitud de Corte", f"{longitud_corte_mm:.0f} mm")
+                res2.metric("Tiempo Estimado", f"{tiempo_minutos:.2f} min")
+                res3.metric("Área Material", f"{area_m2:.4f} m²")
+                res4.metric("Consumo de Gas", f"{consumo_total_gas:.2f} m³")
+
+                st.subheader(f"Costo Estimado Total: ${costo_total:.2f}")
+                
+                with st.expander("Ver desglose detallado de costos", expanded=True):
+                    st.write(f"🏭 **Operación CNC:**")
+                    st.write(f"- Costo máquina (${nuevo_costo_hora}/h): **${costo_tiempo:.2f}**")
+                    st.write(f"- Costo {gas_utilizado} (${costo_gas_unitario}/m³): **${costo_gas_total:.2f}**")
+                    st.write(f"📦 **Materia Prima:**")
+                    st.write(f"- Costo {material_seleccionado} {espesor_seleccionado}mm (a ${precio_m2_chapa}/m²): **${costo_material_total:.2f}**")
+            else:
+                st.error("No se detectó un recorrido de corte válido.")
         else:
-            st.error("No se detectó un recorrido de corte válido.")
-    else:
-        st.warning("Por favor, sube un archivo .DXF o .PDF.")
+            st.warning("Por favor, sube un archivo e indica el espesor válido.")
+
+# ==========================================
+# PESTAÑA 2: BASE DE DATOS DE MATERIALES
+# ==========================================
+with tab2:
+    st.header("🗄️ Gestión de Precios por Espesor")
+    st.write("Aquí puedes actualizar los precios por metro cuadrado (m²) para cada tipo de chapa y espesor.")
+
+    # Usamos el componente st.data_editor para permitir edición en línea estilo Excel
+    df_editado = st.data_editor(
+        df_chapas, 
+        num_rows="dynamic", # Permite agregar o eliminar filas
+        use_container_width=True,
+        column_config={
+            "Material": st.column_config.SelectboxColumn(
+                "Tipo de Material",
+                help="Selecciona el material",
+                options=["Acero al Carbono", "Acero Inoxidable", "Aluminio"],
+                required=True
+            ),
+            "Espesor (mm)": st.column_config.NumberColumn(
+                "Espesor (mm)",
+                help="Grosor de la chapa en milímetros",
+                min_value=0.1,
+                format="%.1f",
+                required=True
+            ),
+            "Precio por m2 ($)": st.column_config.NumberColumn(
+                "Precio por m² ($)",
+                help="Costo del metro cuadrado de este material",
+                min_value=0,
+                format="$%d",
+                required=True
+            )
+        }
+    )
+
+    if st.button("Guardar Cambios en Base de Datos", type="primary"):
+        guardar_bd_chapas(df_editado)
+        st.success("✅ Base de datos actualizada correctamente. Los nuevos precios ya están disponibles en la calculadora.")
+        # Se requiere rerun suave para actualizar el dropdown de la pestaña 1
+        st.rerun()
