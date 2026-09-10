@@ -64,7 +64,6 @@ df_chapas = cargar_bd_chapas()
 # --- 3. FUNCIONES DE EXTRACCIÓN AUTOMÁTICA ---
 def procesar_dxf(file_bytes):
     try:
-        # 1. Solución de Codificación (Soporta UTF-8 y formatos de Windows antiguos)
         try:
             texto_dxf = file_bytes.decode("utf-8")
         except UnicodeDecodeError:
@@ -79,73 +78,88 @@ def procesar_dxf(file_bytes):
         max_x, max_y = float('-inf'), float('-inf')
         
         elementos_encontrados = False
-        advertencia_bloques_splines = False
 
-        for entity in msp:
-            tipo = entity.dxftype()
+        # Función auxiliar para procesar entidades (sirve tanto para ModelSpace como para Bloques)
+        def extraer_entidades_de_espacio(espacio):
+            nonlocal longitud_total, min_x, min_y, max_x, max_y, elementos_encontrados
             
-            # Detectar si hay bloques agrupados o splines
-            if tipo in ['INSERT', 'SPLINE']:
-                advertencia_bloques_splines = True
+            for entity in espacio:
+                tipo = entity.dxftype()
                 
-            if tipo == 'LINE':
-                start, end = entity.dxf.start, entity.dxf.end
-                longitud_total += math.dist((start.x, start.y), (end.x, end.y))
-                min_x = min(min_x, start.x, end.x); max_x = max(max_x, start.x, end.x)
-                min_y = min(min_y, start.y, end.y); max_y = max(max_y, start.y, end.y)
-                elementos_encontrados = True
-
-            elif tipo == 'CIRCLE':
-                longitud_total += 2 * math.pi * entity.dxf.radius
-                cx, cy, r = entity.dxf.center.x, entity.dxf.center.y, entity.dxf.radius
-                min_x = min(min_x, cx - r); max_x = max(max_x, cx + r)
-                min_y = min(min_y, cy - r); max_y = max(max_y, cy + r)
-                elementos_encontrados = True
-
-            elif tipo == 'ARC':
-                angle = math.radians(entity.dxf.end_angle - entity.dxf.start_angle)
-                if angle < 0: angle += 2 * math.pi
-                longitud_total += entity.dxf.radius * angle
-                cx, cy, r = entity.dxf.center.x, entity.dxf.center.y, entity.dxf.radius
-                min_x = min(min_x, cx - r); max_x = max(max_x, cx + r)
-                min_y = min(min_y, cy - r); max_y = max(max_y, cy + r)
-                elementos_encontrados = True
-
-            elif tipo == 'LWPOLYLINE':
-                points = list(entity.get_points('xy'))
-                for i in range(len(points)-1):
-                    longitud_total += math.dist(points[i], points[i+1])
-                    min_x = min(min_x, points[i][0]); max_x = max(max_x, points[i][0])
-                    min_y = min(min_y, points[i][1]); max_y = max(max_y, points[i][1])
-                
-                min_x = min(min_x, points[-1][0]); max_x = max(max_x, points[-1][0])
-                min_y = min(min_y, points[-1][1]); max_y = max(max_y, points[-1][1])
-
-                if entity.closed:
-                    longitud_total += math.dist(points[-1], points[0])
-                elementos_encontrados = True
-                
-            elif tipo == 'POLYLINE':
-                # Soporte para polilíneas de formatos DXF más antiguos
-                points = [(v.dxf.location.x, v.dxf.location.y) for v in entity.vertices]
-                if len(points) > 1:
-                    for i in range(len(points)-1):
-                        longitud_total += math.dist(points[i], points[i+1])
-                        min_x = min(min_x, points[i][0]); max_x = max(max_x, points[i][0])
-                        min_y = min(min_y, points[i][1]); max_y = max(max_y, points[i][1])
-                    
-                    min_x = min(min_x, points[-1][0]); max_x = max(max_x, points[-1][0])
-                    min_y = min(min_y, points[-1][1]); max_y = max(max_y, points[-1][1])
-
-                    if entity.is_closed:
-                        longitud_total += math.dist(points[-1], points[0])
+                if tipo == 'LINE':
+                    start, end = entity.dxf.start, entity.dxf.end
+                    longitud_total += math.dist((start.x, start.y), (end.x, end.y))
+                    min_x = min(min_x, start.x, end.x); max_x = max(max_x, start.x, end.x)
+                    min_y = min(min_y, start.y, end.y); max_y = max(max_y, start.y, end.y)
                     elementos_encontrados = True
 
-        if advertencia_bloques_splines:
-            st.warning("⚠️ **Aviso de Dibujo:** El archivo contiene 'Bloques' (piezas agrupadas) o curvas 'Spline'. Para que el cálculo sea exacto, asegúrate de 'Explotar' (Explode) los bloques en AutoCAD y convertir las Splines a Polilíneas antes de guardar el DXF.")
+                elif tipo == 'CIRCLE':
+                    longitud_total += 2 * math.pi * entity.dxf.radius
+                    cx, cy, r = entity.dxf.center.x, entity.dxf.center.y, entity.dxf.radius
+                    min_x = min(min_x, cx - r); max_x = max(max_x, cx + r)
+                    min_y = min(min_y, cy - r); max_y = max(max_y, cy + r)
+                    elementos_encontrados = True
+
+                elif tipo == 'ARC':
+                    angle = math.radians(entity.dxf.end_angle - entity.dxf.start_angle)
+                    if angle < 0: angle += 2 * math.pi
+                    longitud_total += entity.dxf.radius * angle
+                    cx, cy, r = entity.dxf.center.x, entity.dxf.center.y, entity.dxf.radius
+                    min_x = min(min_x, cx - r); max_x = max(max_x, cx + r)
+                    min_y = min(min_y, cy - r); max_y = max(max_y, cy + r)
+                    elementos_encontrados = True
+
+                elif tipo == 'LWPOLYLINE':
+                    points = list(entity.get_points('xy'))
+                    if len(points) > 1:
+                        for i in range(len(points)-1):
+                            longitud_total += math.dist(points[i], points[i+1])
+                            min_x = min(min_x, points[i][0]); max_x = max(max_x, points[i][0])
+                            min_y = min(min_y, points[i][1]); max_y = max(max_y, points[i][1])
+                        
+                        min_x = min(min_x, points[-1][0]); max_x = max(max_x, points[-1][0])
+                        min_y = min(min_y, points[-1][1]); max_y = max(max_y, points[-1][1])
+
+                        if entity.closed:
+                            longitud_total += math.dist(points[-1], points[0])
+                        elementos_encontrados = True
+
+                elif tipo == 'POLYLINE':
+                    points = [(v.dxf.location.x, v.dxf.location.y) for v in entity.vertices]
+                    if len(points) > 1:
+                        for i in range(len(points)-1):
+                            longitud_total += math.dist(points[i], points[i+1])
+                            min_x = min(min_x, points[i][0]); max_x = max(max_x, points[i][0])
+                            min_y = min(min_y, points[i][1]); max_y = max(max_y, points[i][1])
+                        
+                        min_x = min(min_x, points[-1][0]); max_x = max(max_x, points[-1][0])
+                        min_y = min(min_y, points[-1][1]); max_y = max(max_y, points[-1][1])
+
+                        if entity.is_closed:
+                            longitud_total += math.dist(points[-1], points[0])
+                        elementos_encontrados = True
+
+                elif tipo == 'INSERT':
+                    # Si la pieza es un bloque, intentamos leer las geometrías de adentro del bloque
+                    try:
+                        block_name = entity.dxf.name
+                        if block_name in doc.blocks:
+                            extraer_entidades_de_espacio(doc.blocks[block_name])
+                    except Exception:
+                        pass
+
+        # 1. Procesar el ModelSpace principal
+        extraer_entidades_de_espacio(msp)
+
+        # 2. Plan B: Si el ModelSpace dio vacío, revisamos si por error guardaron todo en los bloques globales
+        if not elementos_encontrados:
+            for block in doc.blocks:
+                # Omitir bloques del sistema de AutoCAD (que empiezan con *)
+                if not block.name.startswith("*"):
+                    extraer_entidades_de_espacio(block)
 
         if not elementos_encontrados:
-            st.error("❌ El DXF se leyó correctamente, pero el 'ModelSpace' (Espacio de Trabajo) está vacío. Verifica que el dibujo no esté en la pestaña 'Presentación/Layout'.")
+            st.error("❌ El DXF se leyó, pero no se encontró geometría de corte (Líneas, Arcos, Círculos o Polilíneas). Asegúrate de que el archivo no esté compuesto puramente de imágenes incrustadas o textos sin vectorizar.")
             return None, None, None
 
         ancho = max_x - min_x
