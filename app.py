@@ -64,67 +64,88 @@ df_chapas = cargar_bd_chapas()
 # --- 3. FUNCIONES DE EXTRACCIÓN AUTOMÁTICA ---
 def procesar_dxf(file_bytes):
     try:
-        stringio = io.StringIO(file_bytes.decode("utf-8"))
+        # 1. Solución de Codificación (Soporta UTF-8 y formatos de Windows antiguos)
+        try:
+            texto_dxf = file_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            texto_dxf = file_bytes.decode("latin-1")
+            
+        stringio = io.StringIO(texto_dxf)
         doc = ezdxf.read(stringio)
         msp = doc.modelspace()
         
         longitud_total = 0.0
-        min_x = float('inf')
-        min_y = float('inf')
-        max_x = float('-inf')
-        max_y = float('-inf')
+        min_x, min_y = float('inf'), float('inf')
+        max_x, max_y = float('-inf'), float('-inf')
         
         elementos_encontrados = False
+        advertencia_bloques_splines = False
 
         for entity in msp:
-            if entity.dxftype() == 'LINE':
+            tipo = entity.dxftype()
+            
+            # Detectar si hay bloques agrupados o splines
+            if tipo in ['INSERT', 'SPLINE']:
+                advertencia_bloques_splines = True
+                
+            if tipo == 'LINE':
                 start, end = entity.dxf.start, entity.dxf.end
                 longitud_total += math.dist((start.x, start.y), (end.x, end.y))
-                min_x = min(min_x, start.x, end.x)
-                max_x = max(max_x, start.x, end.x)
-                min_y = min(min_y, start.y, end.y)
-                max_y = max(max_y, start.y, end.y)
+                min_x = min(min_x, start.x, end.x); max_x = max(max_x, start.x, end.x)
+                min_y = min(min_y, start.y, end.y); max_y = max(max_y, start.y, end.y)
                 elementos_encontrados = True
 
-            elif entity.dxftype() == 'CIRCLE':
+            elif tipo == 'CIRCLE':
                 longitud_total += 2 * math.pi * entity.dxf.radius
                 cx, cy, r = entity.dxf.center.x, entity.dxf.center.y, entity.dxf.radius
-                min_x = min(min_x, cx - r)
-                max_x = max(max_x, cx + r)
-                min_y = min(min_y, cy - r)
-                max_y = max(max_y, cy + r)
+                min_x = min(min_x, cx - r); max_x = max(max_x, cx + r)
+                min_y = min(min_y, cy - r); max_y = max(max_y, cy + r)
                 elementos_encontrados = True
 
-            elif entity.dxftype() == 'ARC':
+            elif tipo == 'ARC':
                 angle = math.radians(entity.dxf.end_angle - entity.dxf.start_angle)
                 if angle < 0: angle += 2 * math.pi
                 longitud_total += entity.dxf.radius * angle
                 cx, cy, r = entity.dxf.center.x, entity.dxf.center.y, entity.dxf.radius
-                min_x = min(min_x, cx - r)
-                max_x = max(max_x, cx + r)
-                min_y = min(min_y, cy - r)
-                max_y = max(max_y, cy + r)
+                min_x = min(min_x, cx - r); max_x = max(max_x, cx + r)
+                min_y = min(min_y, cy - r); max_y = max(max_y, cy + r)
                 elementos_encontrados = True
 
-            elif entity.dxftype() == 'LWPOLYLINE':
+            elif tipo == 'LWPOLYLINE':
                 points = list(entity.get_points('xy'))
                 for i in range(len(points)-1):
                     longitud_total += math.dist(points[i], points[i+1])
-                    min_x = min(min_x, points[i][0])
-                    max_x = max(max_x, points[i][0])
-                    min_y = min(min_y, points[i][1])
-                    max_y = max(max_y, points[i][1])
+                    min_x = min(min_x, points[i][0]); max_x = max(max_x, points[i][0])
+                    min_y = min(min_y, points[i][1]); max_y = max(max_y, points[i][1])
                 
-                min_x = min(min_x, points[-1][0])
-                max_x = max(max_x, points[-1][0])
-                min_y = min(min_y, points[-1][1])
-                max_y = max(max_y, points[-1][1])
+                min_x = min(min_x, points[-1][0]); max_x = max(max_x, points[-1][0])
+                min_y = min(min_y, points[-1][1]); max_y = max(max_y, points[-1][1])
 
                 if entity.closed:
                     longitud_total += math.dist(points[-1], points[0])
                 elementos_encontrados = True
+                
+            elif tipo == 'POLYLINE':
+                # Soporte para polilíneas de formatos DXF más antiguos
+                points = [(v.dxf.location.x, v.dxf.location.y) for v in entity.vertices]
+                if len(points) > 1:
+                    for i in range(len(points)-1):
+                        longitud_total += math.dist(points[i], points[i+1])
+                        min_x = min(min_x, points[i][0]); max_x = max(max_x, points[i][0])
+                        min_y = min(min_y, points[i][1]); max_y = max(max_y, points[i][1])
+                    
+                    min_x = min(min_x, points[-1][0]); max_x = max(max_x, points[-1][0])
+                    min_y = min(min_y, points[-1][1]); max_y = max(max_y, points[-1][1])
+
+                    if entity.is_closed:
+                        longitud_total += math.dist(points[-1], points[0])
+                    elementos_encontrados = True
+
+        if advertencia_bloques_splines:
+            st.warning("⚠️ **Aviso de Dibujo:** El archivo contiene 'Bloques' (piezas agrupadas) o curvas 'Spline'. Para que el cálculo sea exacto, asegúrate de 'Explotar' (Explode) los bloques en AutoCAD y convertir las Splines a Polilíneas antes de guardar el DXF.")
 
         if not elementos_encontrados:
+            st.error("❌ El DXF se leyó correctamente, pero el 'ModelSpace' (Espacio de Trabajo) está vacío. Verifica que el dibujo no esté en la pestaña 'Presentación/Layout'.")
             return None, None, None
 
         ancho = max_x - min_x
@@ -133,7 +154,7 @@ def procesar_dxf(file_bytes):
         return longitud_total, ancho, largo
         
     except Exception as e:
-        st.error(f"Error al leer el DXF: {e}")
+        st.error(f"🛑 Error técnico interno al procesar el DXF: {e}")
         return None, None, None
 
 def procesar_pdf(file_bytes, factor_escala):
