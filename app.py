@@ -78,12 +78,14 @@ def procesar_dxf(file_bytes):
         max_x, max_y = float('-inf'), float('-inf')
         
         elementos_encontrados = False
+        conteo_tipos = {} # Para depurar qué contiene exactamente el archivo
 
         def extraer_entidades_de_espacio(espacio):
-            nonlocal longitud_total, min_x, min_y, max_x, max_y, elementos_encontrados
+            nonlocal longitud_total, min_x, min_y, max_x, max_y, elementos_encontrados, conteo_tipos
             
             for entity in espacio:
                 tipo = entity.dxftype()
+                conteo_tipos[tipo] = conteo_tipos.get(tipo, 0) + 1
                 
                 if tipo == 'LINE':
                     start, end = entity.dxf.start, entity.dxf.end
@@ -139,7 +141,6 @@ def procesar_dxf(file_bytes):
                         elementos_encontrados = True
 
                 elif tipo in ['SPLINE', 'ELLIPSE']:
-                    # Soporte para curvas complejas y elipses convirtiéndolas a puntos segmentados
                     try:
                         points = list(entity.flattening(distance=0.1))
                         if len(points) > 1:
@@ -163,14 +164,19 @@ def procesar_dxf(file_bytes):
         # 1. Procesar ModelSpace
         extraer_entidades_de_espacio(msp)
 
-        # 2. Plan B: Buscar en bloques si el modelspace está vacío
+        # 2. Plan B: Bloques globales
         if not elementos_encontrados:
             for block in doc.blocks:
                 if not block.name.startswith("*"):
                     extraer_entidades_de_espacio(block)
 
         if not elementos_encontrados:
-            st.error("❌ No se encontró geometría de corte válida. El archivo puede contener solo textos, cotas o imágenes que no se pueden cortar con láser.")
+            st.error("❌ El archivo no contiene geometría de corte válida.")
+            # MOSTRAR EL INFORME DE LO QUE SÍ ENCONTRÓ EL ARCHIVO
+            if conteo_tipos:
+                st.warning(f"🔍 El script escaneó el archivo y detectó estos elementos (pero ninguno es apto para corte): {conteo_tipos}")
+            else:
+                st.warning("🔍 El script escaneó el archivo y está completamente vacío o usa una estructura irreconocible.")
             return None, None, None
 
         ancho = max_x - min_x
