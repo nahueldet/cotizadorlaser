@@ -46,24 +46,20 @@ parametros_actuales = cargar_parametros()
 def cargar_bd_chapas():
     if os.path.exists(ARCHIVO_BD):
         df = pd.read_csv(ARCHIVO_BD)
-        # Si la base de datos vieja no tiene la columna "Precio por Kg ($)", se la agregamos
         if "Precio por Kg ($)" not in df.columns:
-            # Estimación genérica si no existe para no romper la app
             df["Precio por Kg ($)"] = df.apply(
                 lambda row: row["Precio por m2 ($)"] / (row["Espesor (mm)"] * DENSIDADES.get(row["Material"], 7.85)), 
                 axis=1
             ).round(2)
         return df
     else:
-        # Base de datos inicial por defecto
         data = {
             "Material": ["Acero al Carbono", "Acero al Carbono", "Acero Inoxidable", "Aluminio"],
             "Espesor (mm)": [1.0, 2.0, 1.0, 1.0],
-            "Precio por Kg ($)": [1500.0, 1500.0, 6500.0, 7000.0] # Precios estimados por kilo
+            "Precio por Kg ($)": [1500.0, 1500.0, 6500.0, 7000.0] 
         }
         df = pd.DataFrame(data)
         
-        # Calcular automáticamente el precio por m2
         def calcular_precio_m2(row):
             peso_m2 = row["Espesor (mm)"] * DENSIDADES[row["Material"]]
             return row["Precio por Kg ($)"] * peso_m2
@@ -73,7 +69,6 @@ def cargar_bd_chapas():
         return df
 
 def guardar_bd_chapas(df):
-    # Antes de guardar, recalculamos SIEMPRE el precio por m2 por seguridad
     def calcular_precio_m2(row):
         peso_m2 = row["Espesor (mm)"] * DENSIDADES[row["Material"]]
         return row["Precio por Kg ($)"] * peso_m2
@@ -264,10 +259,10 @@ if st.sidebar.button("Guardar Parámetros de Máquina", type="primary"):
 st.title("⚙️ Sistema Integral de Cotización CNC")
 
 # --- NAVEGACIÓN POR PESTAÑAS ---
-tab1, tab2, tab3 = st.tabs(["💰 Calculadora de Cotizaciones", "🗄️ Base de Datos de Materiales", "⚖️ Calculadora de Pesos"])
+tab1, tab2, tab3, tab4 = st.tabs(["💰 Cotizador Automático", "⏱️ Cotizador Manual", "🗄️ Base de Datos", "⚖️ Calculadora de Pesos"])
 
 # ==========================================
-# PESTAÑA 1: CALCULADORA DE COSTOS
+# PESTAÑA 1: CALCULADORA DE COSTOS AUTOMÁTICA
 # ==========================================
 with tab1:
     st.header("1. Carga de Plano")
@@ -282,18 +277,18 @@ with tab1:
     col1, col2 = st.columns(2)
     with col1:
         materiales_disponibles = df_chapas["Material"].unique()
-        material_seleccionado = st.selectbox("Material de la Chapa", materiales_disponibles, key="mat_cotizador")
+        material_seleccionado = st.selectbox("Material de la Chapa", materiales_disponibles, key="mat_cotizador_auto")
     with col2:
         espesores_disponibles = df_chapas[df_chapas["Material"] == material_seleccionado]["Espesor (mm)"].unique()
         if len(espesores_disponibles) > 0:
-            espesor_seleccionado = st.selectbox("Espesor (mm)", sorted(espesores_disponibles), key="esp_cotizador")
+            espesor_seleccionado = st.selectbox("Espesor (mm)", sorted(espesores_disponibles), key="esp_cotizador_auto")
         else:
             st.warning("No hay espesores cargados para este material.")
             espesor_seleccionado = 0
 
     st.write("---")
 
-    if st.button("Calcular Costo Final", type="primary", use_container_width=True):
+    if st.button("Calcular Costo Automático", type="primary", use_container_width=True):
         if archivo_corte is not None and espesor_seleccionado > 0:
             file_bytes = archivo_corte.getvalue()
             
@@ -353,13 +348,66 @@ with tab1:
             st.warning("Por favor, sube un archivo e indica el espesor válido.")
 
 # ==========================================
-# PESTAÑA 2: BASE DE DATOS DE MATERIALES
+# PESTAÑA 2: COTIZADOR MANUAL
 # ==========================================
 with tab2:
+    st.header("⏱️ Cotizador Manual (Datos del CAM)")
+    st.write("Utiliza esta calculadora si ya procesaste el plano en el software de la máquina láser y tienes los datos exactos del trabajo.")
+    
+    col_man1, col_man2 = st.columns(2)
+    with col_man1:
+        tiempo_manual_min = st.number_input("Tiempo estimado de corte (minutos)", min_value=0.1, value=5.0, step=0.5)
+        gas_manual_tipo = st.selectbox("Gas utilizado", ["Oxígeno", "Nitrógeno"])
+        consumo_gas_manual_m3 = st.number_input("Consumo de gas estimado (m³)", min_value=0.0, value=1.0, step=0.1)
+    
+    with col_man2:
+        material_man_seleccionado = st.selectbox("Material de la Chapa", materiales_disponibles, key="mat_cotizador_man")
+        espesores_man_disponibles = df_chapas[df_chapas["Material"] == material_man_seleccionado]["Espesor (mm)"].unique()
+        if len(espesores_man_disponibles) > 0:
+            espesor_man_seleccionado = st.selectbox("Espesor (mm)", sorted(espesores_man_disponibles), key="esp_cotizador_man")
+        else:
+            st.warning("No hay espesores cargados para este material.")
+            espesor_man_seleccionado = 0
+            
+        peso_manual_kg = st.number_input("Peso total de la pieza o recorte (kg)", min_value=0.0, value=10.0, step=1.0)
+    
+    st.write("---")
+    
+    if st.button("Calcular Costo Manual", type="primary", use_container_width=True):
+        if espesor_man_seleccionado > 0:
+            # Cálculos manuales basados en los inputs
+            costo_tiempo_man = (tiempo_manual_min / 60) * nuevo_costo_hora
+            
+            precio_gas_unitario_man = nuevo_costo_oxigeno if gas_manual_tipo == "Oxígeno" else nuevo_costo_nitrogeno
+            costo_gas_man = consumo_gas_manual_m3 * precio_gas_unitario_man
+            
+            # Buscar el precio por kg del material en la base de datos
+            fila_material_man = df_chapas[(df_chapas["Material"] == material_man_seleccionado) & (df_chapas["Espesor (mm)"] == espesor_man_seleccionado)]
+            precio_kg_chapa_man = fila_material_man["Precio por Kg ($)"].values[0]
+            
+            costo_material_man = peso_manual_kg * precio_kg_chapa_man
+            
+            costo_total_man = costo_tiempo_man + costo_gas_man + costo_material_man
+            
+            st.header("Resultados de la Cotización Manual")
+            st.subheader(f"Costo Total: ${costo_total_man:.2f}")
+            
+            with st.expander("Ver desglose detallado de costos", expanded=True):
+                st.write(f"🏭 **Operación CNC:**")
+                st.write(f"- Costo máquina ({tiempo_manual_min} min a ${nuevo_costo_hora}/h): **${costo_tiempo_man:.2f}**")
+                st.write(f"- Costo {gas_manual_tipo} ({consumo_gas_manual_m3} m³ a ${precio_gas_unitario_man}/m³): **${costo_gas_man:.2f}**")
+                st.write(f"📦 **Materia Prima:**")
+                st.write(f"- Costo {material_man_seleccionado} {espesor_man_seleccionado}mm ({peso_manual_kg} kg a ${precio_kg_chapa_man}/kg): **${costo_material_man:.2f}**")
+        else:
+            st.error("Por favor, selecciona un espesor válido.")
+
+# ==========================================
+# PESTAÑA 3: BASE DE DATOS DE MATERIALES
+# ==========================================
+with tab3:
     st.header("🗄️ Gestión de Precios por Espesor")
     st.write("Ingresa el Precio por Kg. El sistema calculará automáticamente el Precio por Metro Cuadrado (m²) al guardar.")
 
-    # Mostramos la tabla para edición (bloqueando la columna de Precio por m2 para que no la editen a mano)
     column_config = {
         "Material": st.column_config.SelectboxColumn(
             "Tipo de Material",
@@ -380,11 +428,10 @@ with tab2:
         ),
         "Precio por m2 ($)": st.column_config.NumberColumn(
             "Precio por m² ($) (Calculado)",
-            disabled=True # <--- BLOQUEADO PARA QUE SEA SOLO LECTURA
+            disabled=True 
         )
     }
     
-    # Aseguramos el orden de las columnas visualmente
     column_order = ["Material", "Espesor (mm)", "Precio por Kg ($)", "Precio por m2 ($)"]
 
     df_editado = st.data_editor(
@@ -401,9 +448,9 @@ with tab2:
         st.rerun()
 
 # ==========================================
-# PESTAÑA 3: CALCULADORA DE PESOS
+# PESTAÑA 4: CALCULADORA DE PESOS
 # ==========================================
-with tab3:
+with tab4:
     st.header("⚖️ Calculadora de Pesos de Chapa")
     st.write("Consulta rápidamente el peso teórico del material sin salir de la aplicación.")
     
