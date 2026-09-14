@@ -19,7 +19,7 @@ config_por_defecto = {
     "costo_oxigeno": 180.0
 }
 
-# Diccionario de densidades (kg/m2 por cada 1mm de espesor, equivale a g/cm3)
+# Diccionario de densidades (kg/m2 por cada 1mm de espesor)
 DENSIDADES = {
     "Acero al Carbono": 7.85,
     "Acero Inoxidable": 7.93,
@@ -78,7 +78,7 @@ def procesar_dxf(file_bytes):
         max_x, max_y = float('-inf'), float('-inf')
         
         elementos_encontrados = False
-        conteo_tipos = {} # Para depurar qué contiene exactamente el archivo
+        conteo_tipos = {} 
 
         def extraer_entidades_de_espacio(espacio):
             nonlocal longitud_total, min_x, min_y, max_x, max_y, elementos_encontrados, conteo_tipos
@@ -161,10 +161,8 @@ def procesar_dxf(file_bytes):
                     except Exception:
                         pass
 
-        # 1. Procesar ModelSpace
         extraer_entidades_de_espacio(msp)
 
-        # 2. Plan B: Bloques globales
         if not elementos_encontrados:
             for block in doc.blocks:
                 if not block.name.startswith("*"):
@@ -172,7 +170,6 @@ def procesar_dxf(file_bytes):
 
         if not elementos_encontrados:
             st.error("❌ El archivo no contiene geometría de corte válida.")
-            # MOSTRAR EL INFORME DE LO QUE SÍ ENCONTRÓ EL ARCHIVO
             if conteo_tipos:
                 st.warning(f"🔍 El script escaneó el archivo y detectó estos elementos (pero ninguno es apto para corte): {conteo_tipos}")
             else:
@@ -296,18 +293,19 @@ with tab1:
                 area_m2 = (ancho_pieza * largo_pieza) / 1000000
                 costo_material_total = area_m2 * precio_m2_chapa
 
+                # --- LÓGICA DE CÁLCULO MÁQUINA Y GAS (AJUSTADA A CONSUMOS REALES) ---
                 if "Acero al Carbono" in material_seleccionado:
                     gas_utilizado = "Oxígeno"
                     costo_gas_unitario = nuevo_costo_oxigeno
-                    velocidad_corte_mm_min = 4000 / espesor_seleccionado 
-                    consumo_gas_m3_min = 0.5 * espesor_seleccionado 
+                    velocidad_corte_mm_min = 6000 / (espesor_seleccionado ** 0.8) 
+                    consumo_gas_m3_min = 0.02 + (0.005 * espesor_seleccionado)
                 else:
                     gas_utilizado = "Nitrógeno"
                     costo_gas_unitario = nuevo_costo_nitrogeno
-                    velocidad_corte_mm_min = 3500 / (espesor_seleccionado * 1.2)
-                    consumo_gas_m3_min = 0.8 * espesor_seleccionado
+                    velocidad_corte_mm_min = 5000 / espesor_seleccionado
+                    consumo_gas_m3_min = 0.25 + (0.05 * espesor_seleccionado)
 
-                velocidad_corte_mm_min = max(velocidad_corte_mm_min, 1) 
+                velocidad_corte_mm_min = max(velocidad_corte_mm_min, 50) 
                 tiempo_minutos = longitud_corte_mm / velocidad_corte_mm_min
                 consumo_total_gas = tiempo_minutos * consumo_gas_m3_min
 
@@ -328,7 +326,7 @@ with tab1:
                     st.write(f"- Área total consumida: {area_m2:.4f} m²")
                     st.write(f"- Costo {material_seleccionado} {espesor_seleccionado}mm (a ${precio_m2_chapa}/m²): **${costo_material_total:.2f}**")
             else:
-                st.error("No se detectó un recorrido de corte válido o el archivo está vacío.")
+                pass # El error ya lo maneja la función procesar_dxf
         else:
             st.warning("Por favor, sube un archivo e indica el espesor válido.")
 
@@ -392,14 +390,11 @@ with tab3:
         largo_peso = st.number_input("Largo (mm)", min_value=1.0, value=1000.0, step=100.0, key="largo_calculadora_peso")
         
     # --- CÁLCULOS ---
-    # Peso por m2 = espesor (mm) * densidad (g/cm3)
     peso_por_m2 = espesor_peso * DENSIDADES[material_peso]
-    
-    # Peso total = Area (m2) * peso_por_m2
     area_m2_peso = (ancho_peso * largo_peso) / 1000000
     peso_total = area_m2_peso * peso_por_m2
     
-    st.write("") # Espacio en blanco
+    st.write("")
     
     # --- RESULTADOS ---
     res_peso1, res_peso2 = st.columns(2)
