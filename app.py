@@ -79,7 +79,6 @@ def procesar_dxf(file_bytes):
         
         elementos_encontrados = False
 
-        # Función auxiliar para procesar entidades (sirve tanto para ModelSpace como para Bloques)
         def extraer_entidades_de_espacio(espacio):
             nonlocal longitud_total, min_x, min_y, max_x, max_y, elementos_encontrados
             
@@ -139,8 +138,21 @@ def procesar_dxf(file_bytes):
                             longitud_total += math.dist(points[-1], points[0])
                         elementos_encontrados = True
 
+                elif tipo in ['SPLINE', 'ELLIPSE']:
+                    # Soporte para curvas complejas y elipses convirtiéndolas a puntos segmentados
+                    try:
+                        points = list(entity.flattening(distance=0.1))
+                        if len(points) > 1:
+                            for i in range(len(points)-1):
+                                p1, p2 = points[i], points[i+1]
+                                longitud_total += math.dist((p1[0], p1[1]), (p2[0], p2[1]))
+                                min_x = min(min_x, p1[0], p2[0]); max_x = max(max_x, p1[0], p2[0])
+                                min_y = min(min_y, p1[1], p2[1]); max_y = max(max_y, p1[1], p2[1])
+                            elementos_encontrados = True
+                    except Exception:
+                        pass
+
                 elif tipo == 'INSERT':
-                    # Si la pieza es un bloque, intentamos leer las geometrías de adentro del bloque
                     try:
                         block_name = entity.dxf.name
                         if block_name in doc.blocks:
@@ -148,18 +160,17 @@ def procesar_dxf(file_bytes):
                     except Exception:
                         pass
 
-        # 1. Procesar el ModelSpace principal
+        # 1. Procesar ModelSpace
         extraer_entidades_de_espacio(msp)
 
-        # 2. Plan B: Si el ModelSpace dio vacío, revisamos si por error guardaron todo en los bloques globales
+        # 2. Plan B: Buscar en bloques si el modelspace está vacío
         if not elementos_encontrados:
             for block in doc.blocks:
-                # Omitir bloques del sistema de AutoCAD (que empiezan con *)
                 if not block.name.startswith("*"):
                     extraer_entidades_de_espacio(block)
 
         if not elementos_encontrados:
-            st.error("❌ El DXF se leyó, pero no se encontró geometría de corte (Líneas, Arcos, Círculos o Polilíneas). Asegúrate de que el archivo no esté compuesto puramente de imágenes incrustadas o textos sin vectorizar.")
+            st.error("❌ No se encontró geometría de corte válida. El archivo puede contener solo textos, cotas o imágenes que no se pueden cortar con láser.")
             return None, None, None
 
         ancho = max_x - min_x
