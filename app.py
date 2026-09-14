@@ -45,19 +45,42 @@ parametros_actuales = cargar_parametros()
 # --- 2. LÓGICA DE BASE DE DATOS DE CHAPAS ---
 def cargar_bd_chapas():
     if os.path.exists(ARCHIVO_BD):
-        return pd.read_csv(ARCHIVO_BD)
+        df = pd.read_csv(ARCHIVO_BD)
+        # Si la base de datos vieja no tiene la columna "Precio por Kg ($)", se la agregamos
+        if "Precio por Kg ($)" not in df.columns:
+            # Estimación genérica si no existe para no romper la app
+            df["Precio por Kg ($)"] = df.apply(
+                lambda row: row["Precio por m2 ($)"] / (row["Espesor (mm)"] * DENSIDADES.get(row["Material"], 7.85)), 
+                axis=1
+            ).round(2)
+        return df
     else:
+        # Base de datos inicial por defecto
         data = {
-            "Material": ["Acero al Carbono", "Acero al Carbono", "Acero al Carbono", "Acero Inoxidable", "Aluminio"],
-            "Espesor (mm)": [1.0, 1.2, 2.0, 1.0, 1.0],
-            "Precio por m2 ($)": [15000, 18000, 30000, 45000, 35000]
+            "Material": ["Acero al Carbono", "Acero al Carbono", "Acero Inoxidable", "Aluminio"],
+            "Espesor (mm)": [1.0, 2.0, 1.0, 1.0],
+            "Precio por Kg ($)": [1500.0, 1500.0, 6500.0, 7000.0] # Precios estimados por kilo
         }
         df = pd.DataFrame(data)
+        
+        # Calcular automáticamente el precio por m2
+        def calcular_precio_m2(row):
+            peso_m2 = row["Espesor (mm)"] * DENSIDADES[row["Material"]]
+            return row["Precio por Kg ($)"] * peso_m2
+            
+        df["Precio por m2 ($)"] = df.apply(calcular_precio_m2, axis=1).round(2)
         df.to_csv(ARCHIVO_BD, index=False)
         return df
 
 def guardar_bd_chapas(df):
+    # Antes de guardar, recalculamos SIEMPRE el precio por m2 por seguridad
+    def calcular_precio_m2(row):
+        peso_m2 = row["Espesor (mm)"] * DENSIDADES[row["Material"]]
+        return row["Precio por Kg ($)"] * peso_m2
+        
+    df["Precio por m2 ($)"] = df.apply(calcular_precio_m2, axis=1).round(2)
     df.to_csv(ARCHIVO_BD, index=False)
+    return df
 
 df_chapas = cargar_bd_chapas()
 
@@ -252,7 +275,7 @@ with tab1:
     
     factor_escala_pdf = 1.0
     if archivo_corte is not None and archivo_corte.name.lower().endswith(".pdf"):
-        st.info("⚠️ Has cargado un PDF. Asegúrate de ingresar la escala correcta para que las dimensiones y el recuadro sean exactos.")
+        st.info("⚠️ Has cargado un PDF. Asegúrate de ingresar la escala correcta.")
         factor_escala_pdf = st.number_input("Factor de Escala del PDF (ej: 10 para 1:10)", min_value=0.1, value=1.0)
 
     st.header("2. Especificaciones del Material")
@@ -293,7 +316,6 @@ with tab1:
                 area_m2 = (ancho_pieza * largo_pieza) / 1000000
                 costo_material_total = area_m2 * precio_m2_chapa
 
-                # --- LÓGICA DE CÁLCULO MÁQUINA Y GAS (AJUSTADA A CONSUMOS REALES) ---
                 if "Acero al Carbono" in material_seleccionado:
                     gas_utilizado = "Oxígeno"
                     costo_gas_unitario = nuevo_costo_oxigeno
@@ -326,7 +348,7 @@ with tab1:
                     st.write(f"- Área total consumida: {area_m2:.4f} m²")
                     st.write(f"- Costo {material_seleccionado} {espesor_seleccionado}mm (a ${precio_m2_chapa}/m²): **${costo_material_total:.2f}**")
             else:
-                pass # El error ya lo maneja la función procesar_dxf
+                pass 
         else:
             st.warning("Por favor, sube un archivo e indica el espesor válido.")
 
@@ -335,36 +357,47 @@ with tab1:
 # ==========================================
 with tab2:
     st.header("🗄️ Gestión de Precios por Espesor")
-    st.write("Actualiza los precios por metro cuadrado (m²) para cada tipo de chapa.")
+    st.write("Ingresa el Precio por Kg. El sistema calculará automáticamente el Precio por Metro Cuadrado (m²) al guardar.")
+
+    # Mostramos la tabla para edición (bloqueando la columna de Precio por m2 para que no la editen a mano)
+    column_config = {
+        "Material": st.column_config.SelectboxColumn(
+            "Tipo de Material",
+            options=["Acero al Carbono", "Acero Inoxidable", "Aluminio"],
+            required=True
+        ),
+        "Espesor (mm)": st.column_config.NumberColumn(
+            "Espesor (mm)",
+            min_value=0.1,
+            format="%.1f",
+            required=True
+        ),
+        "Precio por Kg ($)": st.column_config.NumberColumn(
+            "Precio por Kg ($)",
+            min_value=0,
+            format="$%d",
+            required=True
+        ),
+        "Precio por m2 ($)": st.column_config.NumberColumn(
+            "Precio por m² ($) (Calculado)",
+            disabled=True # <--- BLOQUEADO PARA QUE SEA SOLO LECTURA
+        )
+    }
+    
+    # Aseguramos el orden de las columnas visualmente
+    column_order = ["Material", "Espesor (mm)", "Precio por Kg ($)", "Precio por m2 ($)"]
 
     df_editado = st.data_editor(
         df_chapas, 
+        column_order=column_order,
         num_rows="dynamic",
         use_container_width=True,
-        column_config={
-            "Material": st.column_config.SelectboxColumn(
-                "Tipo de Material",
-                options=["Acero al Carbono", "Acero Inoxidable", "Aluminio"],
-                required=True
-            ),
-            "Espesor (mm)": st.column_config.NumberColumn(
-                "Espesor (mm)",
-                min_value=0.1,
-                format="%.1f",
-                required=True
-            ),
-            "Precio por m2 ($)": st.column_config.NumberColumn(
-                "Precio por m² ($)",
-                min_value=0,
-                format="$%d",
-                required=True
-            )
-        }
+        column_config=column_config
     )
 
-    if st.button("Guardar Cambios en Base de Datos", type="primary"):
-        guardar_bd_chapas(df_editado)
-        st.success("✅ Base de datos actualizada correctamente.")
+    if st.button("Guardar Cambios y Calcular m²", type="primary"):
+        df_actualizado = guardar_bd_chapas(df_editado)
+        st.success("✅ Base de datos actualizada y precios por m² recalculados.")
         st.rerun()
 
 # ==========================================
@@ -372,7 +405,7 @@ with tab2:
 # ==========================================
 with tab3:
     st.header("⚖️ Calculadora de Pesos de Chapa")
-    st.write("Consulta rápidamente el peso teórico del material sin salir de la aplicación. Los cálculos se actualizan automáticamente al cambiar los valores.")
+    st.write("Consulta rápidamente el peso teórico del material sin salir de la aplicación.")
     
     col_peso1, col_peso2 = st.columns(2)
     with col_peso1:
@@ -389,14 +422,12 @@ with tab3:
     with col_peso4:
         largo_peso = st.number_input("Largo (mm)", min_value=1.0, value=1000.0, step=100.0, key="largo_calculadora_peso")
         
-    # --- CÁLCULOS ---
     peso_por_m2 = espesor_peso * DENSIDADES[material_peso]
     area_m2_peso = (ancho_peso * largo_peso) / 1000000
     peso_total = area_m2_peso * peso_por_m2
     
     st.write("")
     
-    # --- RESULTADOS ---
     res_peso1, res_peso2 = st.columns(2)
     res_peso1.metric("⚖️ Peso por Metro Cuadrado", f"{peso_por_m2:.2f} kg/m²")
     res_peso2.metric("📦 Peso Total de la Pieza", f"{peso_total:.2f} kg")
